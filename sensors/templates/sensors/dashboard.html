@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IoT Temperature Dashboard</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      background-color: #f8f9fa;
+    }
+    .chart-card {
+      background-color: white;
+      border-radius: 1rem;
+      padding: 2rem;
+      box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+      height: 500px;
+    }
+    #tempChart {
+      width: 100% !important;
+      height: 100% !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-fluid">
+      <span class="navbar-brand mb-0 h1">🌡️ IoT Temperature Dashboard</span>
+    </div>
+  </nav>
+
+  <!-- Chart Section -->
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-lg-12">
+        <div class="chart-card">
+          <h4 class="text-center mb-4">Live Temperature Monitoring</h4>
+          <canvas id="tempChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alerts Table Section -->
+  <div class="container mt-5">
+    <div class="row justify-content-center">
+      <div class="col-lg-12">
+        <h5 class="text-center mb-3">⚠️ Recent Temperature Alerts</h5>
+        <div class="table-responsive">
+          <table class="table table-bordered table-striped">
+            <thead class="table-dark">
+              <tr>
+                <th>Sensor ID</th>
+                <th>Temperature (°C)</th>
+                <th>Timestamp</th>
+                <th>Alert Message</th>
+              </tr>
+            </thead>
+            <tbody id="alertTableBody">
+              <!-- Filled dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript for Chart, Alerts, WebSocket, and CSRF -->
+  <script>
+    const ctx = document.getElementById('tempChart').getContext('2d');
+    const tempChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Temperature (°C)',
+          data: [],
+          borderColor: 'rgb(255, 99, 132)',
+          backgroundColor: 'rgba(255, 99, 132, 0.2)',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { title: { display: true, text: 'Time' }},
+          y: { title: { display: true, text: 'Temperature (°C)' }, suggestedMin: -10, suggestedMax: 60 }
+        }
+      }
+    });
+
+    function updateChart(timestamp, temperature) {
+      const time = new Date(timestamp).toLocaleTimeString();
+      tempChart.data.labels.push(time);
+      tempChart.data.datasets[0].data.push(temperature);
+      if (tempChart.data.labels.length > 20) {
+        tempChart.data.labels.shift();
+        tempChart.data.datasets[0].data.shift();
+      }
+      tempChart.update();
+    }
+
+    function fallbackToPolling() {
+  let lastTimestamp = null;
+
+  async function fetchData() {
+    try {
+      const res = await fetch("/api/sensor-data/recent/");
+      const readings = await res.json();
+
+      //  If it's the first time, clear chart first
+      if (lastTimestamp === null) {
+        tempChart.data.labels = [];
+        tempChart.data.datasets[0].data = [];
+      }
+
+      readings.reverse().forEach(r => {
+        const currentTime = new Date(r.timestamp).getTime();
+        if (!lastTimestamp || currentTime > lastTimestamp) {
+          updateChart(r.timestamp, r.temperature);
+          lastTimestamp = currentTime;
+        }
+      });
+
+    } catch (err) {
+      console.error("Fetch error:", err);
+    }
+  }
+
+  fetchData();
+  setInterval(fetchData, 5000);
+}
+
+    async function loadAlerts() {
+      try {
+        const res = await fetch('/api/sensor-alerts/');
+        const alerts = await res.json();
+        const table = document.getElementById('alertTableBody');
+        table.innerHTML = '';
+        alerts.forEach(alert => {
+          const row = `
+            <tr>
+              <td>${alert.sensor_id}</td>
+              <td>${alert.temperature}</td>
+              <td>${new Date(alert.timestamp).toLocaleString('en-IN', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true
+})}</td>
+
+              <td>${alert.alert_message}</td>
+            </tr>
+          `;
+          table.innerHTML += row;
+        });
+      } catch (err) {
+        console.error('Failed to load alerts:', err);
+      }
+    }
+
+    loadAlerts();
+    setInterval(loadAlerts, 10000); // Auto-refresh alerts every 10s
+
+    // Utility: Get CSRF token from cookie
+    function getCookie(name) {
+      let cookieValue = null;
+      if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+          const cookie = cookies[i].trim();
+          if (cookie.substring(0, name.length + 1) === (name + '=')) {
+            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+            break;
+          }
+        }
+      }
+      return cookieValue;
+    }
+
+    // Example POST (optional)
+    async function sendSensorData(sensor_id, temperature) {
+      const res = await fetch("/api/sensor-data/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCookie('csrftoken')
+        },
+        body: JSON.stringify({
+          sensor_id: sensor_id,
+          temperature: temperature,
+          timestamp: new Date().toISOString()
+        })
+      });
+
+      const data = await res.json();
+      console.log("Sensor POST Response:", data);
+    }
+
+    // Example usage:
+    // sendSensorData("sensor_1", 45.3);
+    fallbackToPolling();   
+  </script>
+</body>
+</html>
